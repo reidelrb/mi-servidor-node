@@ -3,10 +3,16 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = 8000;
+// Función para obtener el directorio base correcto
+function getBaseDirectory() {
+  return process.pkg 
+    ? path.dirname(process.execPath)  // Directorio del ejecutable cuando está empaquetado
+    : __dirname;                     // Directorio normal en desarrollo
+}
 const server = http.createServer((req, res) => {
     // Servir archivos estáticos (GET)
     if (req.method === 'GET') {
-        let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
+        let filePath = path.join(getBaseDirectory(), req.url === '/' ? 'index.html' : req.url);
         
         fs.readFile(filePath, (err, data) => {
             if (err) {
@@ -20,13 +26,7 @@ const server = http.createServer((req, res) => {
     
     // Reemplazar archivos (POST)
     else if (req.method === 'POST') {
-        const filePath = path.join(__dirname, req.url);
-        
-        // Validaciones básicas
-        if (req.url.includes('../') || req.url === '/') {
-            res.writeHead(400);
-            return res.end('Ruta inválida');
-        }
+        const filePath = path.join(getBaseDirectory(), req.url);
 
         const writeStream = fs.createWriteStream(filePath);
         req.pipe(writeStream);
@@ -45,6 +45,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`✅ Servidor activo en http://localhost:${PORT}`);
-    console.log(`📂 Directorio actual: ${__dirname}`);
+    console.log(`📂 Directorio actual: ${getBaseDirectory()}`);
     console.log('POST: Envía archivos para reemplazar los existentes');
 });
