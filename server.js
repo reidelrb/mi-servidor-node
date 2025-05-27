@@ -1,147 +1,84 @@
-const fs = require('fs');
+require('dotenv').config();
 const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
-
 const PORT = 8000;
 
-function getBaseDirectory() {
-  return process.pkg 
-    ? path.dirname(process.execPath)
-    : __dirname;
-}
+if (!fs.existsSync(path.join(__dirname, '.data'))) fs.mkdirSync(path.join(__dirname, '.data'));
+if (!fs.existsSync(path.join(__dirname, '.data', 'uploads'))) fs.mkdirSync(path.join(__dirname, '.data', 'uploads'));
 
-function ensureSysDirectory() {
-  const baseDir = getBaseDirectory();
-  const sysZipPath = path.join(baseDir, 'sys.zip');
-  const sysDirPath = path.join(baseDir, 'sys');
-  
-  if (fs.existsSync(sysZipPath)) {
-    try {
-      if (fs.existsSync(sysDirPath)) {
-        fs.rmSync(sysDirPath, { recursive: true, force: true });
-      }
-      
-      fs.mkdirSync(sysDirPath);
-      
-      console.log('Descomprimiendo sys.zip...');
-      if (process.platform === 'win32') {
-        execSync(`powershell -command "Expand-Archive -Path '${sysZipPath}' -DestinationPath '${baseDir}'"`);
-      } else {
-        execSync(`unzip -o '${sysZipPath}' -d '${baseDir}'`);
-      }
-      
-      fs.unlinkSync(sysZipPath);
-      console.log('sys.zip descomprimido y eliminado');
-      
-    } catch (err) {
-      console.error('Error al procesar sys.zip:', err);
-    }
-  }
-  
-  if (!fs.existsSync(sysDirPath)) {
-    fs.mkdirSync(sysDirPath);
-  }
-}
-
-ensureSysDirectory();
-if (!fs.existsSync(path.join(getBaseDirectory(), 'sys','uploads'))) {
-  fs.mkdirSync(path.join(getBaseDirectory(), 'sys','uploads'));
-}
-
-const dataFile = path.join(getBaseDirectory(), 'data.json');
-let database = {};
+let database = [];
 try {
-  database = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+  database = JSON.parse(fs.readFileSync(path.join(__dirname, '.data', 'data.json'), 'utf8'));
 } catch (err) {
-  database = { personal: [] };
+  console.log('Sin db')
 }
 
-function decodeCI(ci) {
-  if (!/^\d{11}$/.test(ci)) return {};
-  const day = ci.substr(4, 2), month = ci.substr(2, 2), yy = ci.substr(0, 2);
-  const fullYear = (parseInt(yy) <= new Date().getFullYear() % 100) ? 2000 + parseInt(yy) : 1900 + parseInt(yy);
-  const nacido = `${day}/${month}/${fullYear}`;
-
-  const today = new Date();
-  const nacidoThisYear = new Date(today.getFullYear(),parseInt(month) - 1,parseInt(day));
-  const edad = (today.getFullYear() - fullYear - (today < nacidoThisYear ? 1 : 0)).toString();
-
-  const sexo = parseInt(ci[9]) % 2 === 0 ? "M" : "F";
-  return {nacido,edad,sexo}
+const saveDb = () => {
+  fs.writeFileSync(path.join(__dirname, '.data', 'data.json'), JSON.stringify(database, null, 2))
 }
 
-const db = (() => {
-  const match = (obj, criteria) => {
-    for (const key in criteria) {
-      const val = criteria[key];
-      
-      if (val && typeof val === 'object') {
-        if ('$menor' in val && !(obj[key] <= val.$menor)) return false;
-        if ('$mayor' in val && !(obj[key] >= val.$mayor)) return false;
-      }
-      else if (typeof val === 'string' && typeof obj[key] === 'string') {
-        if (!obj[key].toLowerCase().includes(val.toLowerCase())) return false;
-      }
-      else {
-        if (obj[key] !== val) return false;
-      }
-    }
-    return true;
-  };
+const outData = (o) => {
+  function agg(i) {
+    return Object.assign({}, i, { img: (fs.existsSync(path.join(__dirname, `.data/uploads/${i.id}.jpg`))) ? !0 : undefined }, { time: Date.now() - i.time })
+  }
+  if (!o.length) {
+    if (o.error && o.error == 404) return null;
+    return agg(o)
+  }
+  return o.map(i => agg(i))
+}
 
-  return {
-    find(criteria) {
-      return database.personal.filter(obj => match(obj, criteria));
-    },
-    add(data) {
-      database.personal.push(data);
-      fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
-      return data;
-    },
-    update(criteria, newData) {
-      const found = database.personal.find(obj => match(obj, criteria));
-      if (found) Object.assign(found, newData);
-      fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
-      return found || null;
-    },
-    move(criteria, newIndex) {
-      if (typeof newIndex !== 'number' || newIndex < 0 || newIndex >= database.personal.length) {
-        return null
-      }
-      const currentIndex = database.personal.findIndex(obj => match(obj, criteria));
-      if (currentIndex === -1) return null;
-      if (currentIndex === newIndex) return database.personal[newIndex];
-      const [element] = database.personal.splice(currentIndex, 1);
-      database.personal.splice(newIndex, 0, element);
-      fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
-      return element;
+const TOKEN = process.env.TOKEN;
+const apiUrl = `https://api.telegram.org/bot${TOKEN}`;
+
+function Telegram(method, data, callback) {
+  const options = {
+    hostname: 'api.telegram.org',
+    path: `/bot${TOKEN}/${method}`,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
     }
   };
-})();
+  const req = https.request(options, (res) => {
+    let responseData = '';
+    res.on('data', (chunk) => {
+      responseData += chunk;
+    });
+    res.on('end', () => {
+      try {
+        const parsedData = JSON.parse(responseData);
+        callback(null, parsedData);
+      } catch (error) {
+        callback(error);
+      }
+    });
+  });
+  req.on('error', (error) => {
+    callback(error);
+  });
+  req.write(JSON.stringify(data));
+  req.end();
+}
+function msg(){
+  Telegram('sendMessage', { chat_id: 6526862605, text: 'hola' }, (e, d) => {console.log({e,d})})
+}
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
+
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
-    return;
+    return
   }
-  
-  if (req.method === 'GET') {
-    if(req.url=='/ip') return res.end(getLocalIp());
-    if(req.url=='/reload') {
-      database = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-      database.personal = database.personal.map(e=>{return Object.assign(e,decodeCI(e.ci||''))})
-      req.url = '/'
-    }
 
-    let filePath = path.join(getBaseDirectory(), (req.url == '/data.json' ? '' : 'sys'), req.url === '/' ? 'index.html' : req.url);
-    
-    fs.readFile(filePath, (err, data) => {
+  if (req.method === 'GET') {
+    fs.readFile(path.join(__dirname, '.data', req.url === '/' ? 'index.html' : req.url.split('?')[0]), (err, data) => {
       if (err) {
         res.writeHead(404);
         return res.end();
@@ -151,93 +88,148 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  
-  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    if (req.url == '/curl') {
+
+  if (['POST'].includes(req.method)) {    
+    if (req.url == '/') {
       let body = '';
-      req.on('data', chunk => { 
-        body += chunk.toString();
-      });
+      req.on('data', chunk => { body += chunk.toString() });
       req.on('end', () => {
         try {
           body = JSON.parse(body);
-          let curl = {};
-          if (body.add) curl = db.add(body.add || {});
-          if (body.find) curl = db.find(body.find);
-          if (body.update) curl = db.update(body.update, body.data || {});
-          if (body.move) curl = db.move(body.move, body.index);
+          let curl = [null];
+          if (body.fileData) {
+            try {
+              const base64Data = body.fileData.data.replace(/^data:image\/\w+;base64,/, '').replace(/^data:text\/\w+;base64,/, '');
+              const buffer = Buffer.from(base64Data, 'base64');
+              try {
+                fs.writeFileSync(path.join(__dirname, '.data', body.fileData.name), buffer);
+                curl = { upload: 200 };
+              } catch (err) {
+                curl = { upload: 500 };
+              }
+            } catch (e) {
+              curl = { upload: 500 }
+            }
+          }
 
+          if (body.all) {
+            curl = database
+          } else if (body.add) {
+            Object.assign(body.add, { time: Date.now() })
+            database.push(body.add);
+            saveDb()
+            if (body.add.id) {
+              console.log('avatar de telegram...')
+              Telegram('getUserProfilePhotos', { user_id: body.add.id }, (e, d) => {
+                if (e) {
+                  res.end(JSON.stringify(outData(body.add)));
+                  console.log('error al cargar avatar');
+                } else {
+                  if (d.result && d.result.total_count > 0) {
+                    Telegram('getFile', { file_id: d.result.photos[0][0].file_id }, (err, file) => {
+                      if (err) {
+                        res.end(JSON.stringify(outData(body.add)));
+                      } else {
+                        if (!file.ok) {
+                          res.end(JSON.stringify(outData(body.add)));
+                        } else {
+                          const downloadUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.result.file_path}`;
+                          const filePath = path.join(__dirname, '.data', 'uploads', body.add.id + '.jpg');
+                          const foto = fs.createWriteStream(filePath);
+
+                          https.get(downloadUrl, (response) => {
+                            response.pipe(foto);
+
+                            foto.on('finish', () => {
+                              foto.close();
+                              console.log('avatar telegram cargado')
+                              res.end(JSON.stringify(outData(body.add)));
+                            });
+                          }).on('error', (err) => {
+                            fs.unlink(filePath, () => { });
+                            res.end(JSON.stringify(outData(body.add)));
+                          });
+                        }
+                      }
+                    })
+                  } else {
+                    res.end(JSON.stringify(outData(body.add)));
+                  }
+                }
+              })
+              return;
+            }
+            curl = body.add
+          } else if (body.delete) {
+            database = database.filter(s => s.id != body.delete)
+            saveDb()
+            curl = database
+          } else if (body.find) {
+            const key = Object.keys(body.find)[0]
+            curl = database.filter(s => s[key] && s[key] == body.find[key])
+          } else if (body.update) {
+            const key = Object.keys(body.update)[0]
+            const found = database.filter(s => s[key] && s[key] == body.update[key])
+            saveDb()
+            if (found && found[0] && body.data) {
+              Object.assign(found[0], body.data, { time: Date.now() })
+            }
+            curl = found[0] || { error: 404 }
+          } else if (body.telegramChat) {
+            Telegram('sendMessage', { chat_id: body.telegramChat.userid, text: `${body.telegramChat.text}` }, (e, d) => {
+              if (e) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ error: e }));
+              }
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ send: d }));
+            })
+            return;
+          }else if (body.sendPhoto) {
+            Telegram( "sendPhoto", {
+              chat_id: body.sendPhoto.userid,
+              photo: body.sendPhoto.url,
+              caption: body.sendPhoto.text,
+            },(error, ok) => {
+              res.end(JSON.stringify({error,ok }))
+            });
+            return;
+          }
+          const data = outData(curl)
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(curl));
+          res.end(JSON.stringify(data));
         } catch (e) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({error:'Error en la operación'}));
+          res.end(JSON.stringify({ error: 'Error en la operación: ' + e }));
         }
       });
       return;
     }
-    
-    const filePath = path.join(getBaseDirectory(), req.url);
-    
-    if (req.method === 'DELETE') {
-      try {
-        fs.unlinkSync(filePath);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ok:'eliminado'}));
-      } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({error:''}));
-      }
-      return;
-    }
-
-    let body = [];
-    req.on('data', (chunk) => {
-      body.push(chunk);
-    }).on('end', () => {
-      try {
-        body = JSON.parse(Buffer.concat(body).toString());
-        
-        if (!body.imageData || !body.filename) {
-          throw new Error('Datos incompletos');
-        }
-        
-        const base64Data = body.imageData.replace(/^data:image\/\w+;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-        
-        const filename = `${body.filename}`;
-        const filepath = path.join(getBaseDirectory(), 'sys','uploads', filename);
-        
-        fs.writeFile(filepath, buffer, (err) => {
-          if (err) {
-            console.error(err);
-            res.writeHead(500, {'Content-Type': 'application/json'});
-            res.end(JSON.stringify({error: 'Error al guardar la imagen'}));
-            return;
-          }
-          
-          res.writeHead(200, {'Content-Type': 'application/json'});
-          res.end(JSON.stringify({message: 'Imagen subida con éxito', filename}));
-        });
-      } catch (err) {
-        console.error(err);
-        res.writeHead(400, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify({error: 'Datos inválidos'}));
-      }
-    });
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => console.log(`● server created by @reidel\n- active on [${__dirname}]\n● http://localhost:${PORT}\n● http://${getLocalIp()}:${PORT}`));
 
-function getLocalIp() {
-  const interfaces = require('os').networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
+(function autoPing() {
+  console.log('Auto ping cada 2 minutos')
+  const https = require('https');
+  const PING_INTERVAL = 60000 * 2; // 2 minutos
+  const PING_URL = `https://${process.env.PROJECT_DOMAIN}.glitch.me/uploads/default.jpg`;
+  const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+
+  const ping = () => {
+    const options = {
+      headers: { 'User-Agent': USER_AGENT } // Simula un navegador real
+    };
+    https.get(PING_URL, options, (res) => {
+      console.log(`[AutoPing] ✅ Ping exitoso (Status: ${res.statusCode})`);
+    }).on('error', (err) => {
+      console.log(`[AutoPing] ❌ Error: ${err.message}`);
+    });
+  };
+  if (process.env.PROJECT_DOMAIN) {
+    ping();
+    setInterval(ping, PING_INTERVAL);
   }
-  return 'localhost';
-}
+})();
+
+server.listen(PORT, '0.0.0.0', () => console.log(`●${__dirname}:${PORT}\n`));
