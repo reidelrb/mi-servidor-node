@@ -232,4 +232,4 @@ const server = http.createServer((req, res) => {
   }
 })();
 
-server.listen(PORT, '8000', () => console.log(`●${__dirname}:${PORT}\n`));
+server.listen(PORT, () => console.log(`●${__dirname}:${PORT}\n`));
