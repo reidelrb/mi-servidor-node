@@ -3,7 +3,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const PORT = 8000;
+const PORT = 8000
 
 if (!fs.existsSync(path.join(__dirname, '.data'))) fs.mkdirSync(path.join(__dirname, '.data'));
 if (!fs.existsSync(path.join(__dirname, '.data', 'uploads'))) fs.mkdirSync(path.join(__dirname, '.data', 'uploads'));
